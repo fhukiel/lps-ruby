@@ -1,0 +1,123 @@
+Lexer {
+  HaskellImport "Data.Char" "DChar";
+  def = /def/ NextState "afterDef";
+  mult = /\*/ State { Default };
+  string = /[\"][^\"]*[\"]|[\'][^\']*[\']/ :: String »(\c -> case c of [] -> []; (x:[]) -> c; (x:xs) -> init xs)» «(\s -> "\"" ++ s ++ "\"")«;
+  regexp = /\/.*\// :: String;
+  bool = /true|false/ :: Bool »(\(c:cs) -> read $(DChar.toUpper $ c):cs)» «(\b -> (\(c:cs) -> (DChar.toLower c) : cs) $ show b)«;
+  id = /[@]?[a-zA-Z_][a-zA-Z0-9_]*(! | \?)?/ :: String;
+  defId = /[a-zA-Z_\*\+\-\/][a-zA-Z0-9_]*/ :: String State {"afterDef"} NextState Default;
+  number = /[0-9]+ (\. [0-9]+)?/ :: String;
+  symassocid = /[a-zA-Z_][a-zA-Z0-9_]*:/ :: String;
+  comment = /\#.*/ NoAction :: String; (* Was ist wenn kein \n am Ende? (letzte Zeile in der Datei) *)
+  nl = /[\n]+/ :: String »(\_ -> "\n")»;
+  whitespace = /[\ \t\f\v\r]+/ NoAction State { Default, "afterDef" };
+}
+
+Parser {
+  %left "||";
+  %left "&&";
+  %nonassoc "..";
+  %nonassoc "==" "!=";
+  %nonassoc ">" ">=" "<" "<=";
+  %left "+" "-";
+  %left mult "/" "%";
+  %right "**";
+
+  CompStmt = {nl}<> Stmt T<> {nl}<> {Stmt T<> {nl}<>}<CompStmtItem>;
+  
+  CompStmtEmpty = {nl}<> {Stmt T<> {nl}<>}<CompStmtEmptyItem>;
+
+  T = ';' | nl@(2-);
+
+  T2 = ';' | nl;
+
+  Stmt = IfStmt: 'if' Expr 'then' CompStmtEmpty ['else' CompStmtEmpty]<ElseCase> 'end'
+       | WhileStmt: 'while' Expr 'do' CompStmtEmpty 'end'
+       | ForStmt: 'for' Identifier 'in' Expr '..' Expr DoOpt<> CompStmtEmpty 'end'
+       | CallStmt: Call
+       | BlockCallStmt: BlockCall @(3-)
+       | AssignStmt: id '=' Expr
+       | IndexAssignStmt: IndexExpr '=' Expr
+       | ReturnStmt: 'return' [Expr]
+       | DefStmt: Def
+       | ClassStmt: 'class' Identifier T2<> {nl}<> {Def T<> {nl}<> | Public: 'public' {nl}<> | Private: 'private' {nl}<>}<ClassBody> 'end'
+       | Rescue: 'begin' CompStmtEmpty RescueBlock
+       | Raise: 'raise' (Identifier | ArgCall)<RaiseArgument>;
+
+  DoOpt = 'do' | T2<>;
+
+  Identifier = id [QMark: '?'| EMark: '!']<IdAddon>;
+
+  DefIdentifier = defId [QMark2: '?'| EMark2: '!']<IdAddon2>;
+
+  Def = def DefIdentifier [ParamList] T2<> [CompStmt] 'end';
+
+  Call = ArgCall | IdExpr;
+
+  ArgCall = SimpleExpr '.' Identifier [ArgList] | Identifier ArgList;
+
+  BlockCall = Call 'do' [BlockParams] CompStmtEmpty 'end';
+
+  BlockParams = '|' Identifier {',' Identifier}<BlockParam> '|';
+
+  ArgList = ArgList: '(' Expr {',' Expr}<Arg> ')' | NoArgs: '()';
+
+  ParamList = '(' Identifier {',' Identifier}<Param> ')' | '()'<>;
+
+  IdExpr = Identifier;
+
+  SimpleExpr = NumExpr: number
+       | StringExpr: string
+       | BoolExpr: bool
+       | SymbolExpr: Symbol
+       | ArrayExpr: Array
+       | HashExpr: Hash
+       | RegexpExpr: regexp
+       | CallExpr: ArgCall
+       | ParenExpr: '(' Expr ')'
+       | IndexExpr: IndexExpr
+       | UnopExpr: (UnOpPlus:"+"|UnOpMinus:"-")<Unop> SimpleExpr
+       | IdExpr
+       ;
+
+    Expr = Plus: Expr '+' Expr
+       | Minus: Expr '-' Expr
+       | Exp: Expr '**' Expr
+       | Mult: Expr mult Expr
+       | Div: Expr '/' Expr
+       | Mod: Expr '%' Expr
+       | Equ: Expr '==' Expr
+       | Neq: Expr '!=' Expr
+       | Let: Expr '<' Expr
+       | Get: Expr '>' Expr
+       | Leq: Expr '<=' Expr
+       | Geq: Expr '>=' Expr
+       | And: Expr '&&' Expr
+       | Or: Expr '||' Expr
+       | Range: Expr '..' Expr
+       | IfExpr: 'if' Expr 'then' Expr 'else' Expr 'end' (* optionales else ab bestimmtem level erlauben? *)
+       | SimpleExpr
+       ;
+
+  Symbol = ':' Identifier;
+
+  Array = '[' ExprList ']';
+
+  ExprList = [ Expr {',' Expr}<ExprItem> ]<ExprListActual>;
+
+  Hash = '{' Assocs '}';
+
+  Assocs = Assoc {',' Assoc}<AssocItem>
+         | SymAssoc {',' SymAssoc}<SymAssocItem>
+         ;
+
+  Assoc = Expr '=>' Expr;
+
+  SymAssoc = symassocid Expr;
+
+  IndexExpr = Index: SimpleExpr '[' Expr {',' Expr}<IndexExprItem> ']';
+
+  RescueBlock = 'rescue' [Identifier]<ExceptionClass> ['=>' Identifier ]<ExceptionAssignment> CompStmtEmpty 'end';
+
+}
